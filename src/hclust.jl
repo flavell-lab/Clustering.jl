@@ -391,8 +391,12 @@ end
 ##   find i,j that minimize D(i,j)
 ##   merge clusters i and j
 ##   update D(i,j) and NN(i) accordingly
-function hclust_minimum(ds::AbstractMatrix{T}) where T<:Real
-    d = Matrix(ds)      # active trees distances, only upper (i < j) is used
+function hclust_minimum(ds::AbstractMatrix{T}; use_sparse=true) where T<:Real
+    if use_sparse
+        d = sparse(ds)      # active trees distances, only upper (i < j) is used
+    else
+        d = Matrix(ds)
+    end
     mindist = MinimalDistance(d)
     hmer = HclustMerges{T}(size(d, 1))
     n = nnodes(hmer)
@@ -748,9 +752,10 @@ Returns the dendrogram as a [`Hclust`](@ref) object.
      neighboring leaves from separate branches using the "fast optimal leaf ordering"
      algorithm from
      [Bar-Joseph et. al. _Bioinformatics_ (2001)](https://doi.org/10.1093/bioinformatics/17.suppl_1.S22)
+- `use_sparse::Bool` (optional): whether to store intermediate data in sparse matrix format. Currently only implemented for single linkage.
 """
 function hclust(d::AbstractMatrix; linkage::Symbol = :single,
-                uplo::Union{Symbol, Nothing} = nothing, branchorder::Symbol=:r)
+                uplo::Union{Symbol, Nothing} = nothing, branchorder::Symbol=:r, use_sparse::Bool=true)
     if uplo !== nothing
         sd = Symmetric(d, uplo) # use upper/lower part of d
     else
@@ -758,7 +763,7 @@ function hclust(d::AbstractMatrix; linkage::Symbol = :single,
         sd = d
     end
     if linkage == :single
-        hmer = hclust_minimum(sd)
+        hmer = hclust_minimum(sd, use_sparse=use_sparse)
     elseif linkage == :complete
         hmer = hclust_nn_lw(sd, MaximumDistance(sd))
     elseif linkage == :average
