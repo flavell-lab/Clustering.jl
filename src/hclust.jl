@@ -1,3 +1,12 @@
+using Distances
+using NearestNeighbors
+using StatsBase
+
+using Printf
+using LinearAlgebra
+using SparseArrays
+using Statistics
+
 ## hclust.jl (c) 2014, 2017 David A. van Leeuwen
 ## Hierarchical clustering, similar to R's hclust()
 
@@ -393,7 +402,7 @@ end
 ##   update D(i,j) and NN(i) accordingly
 function hclust_minimum(ds::AbstractMatrix{T}; use_sparse=true) where T<:Real
     if use_sparse
-        d = sparse(ds)      # active trees distances, only upper (i < j) is used
+        d = copy(sparse(ds))      # active trees distances, only upper (i < j) is used
     else
         d = Matrix(ds)
     end
@@ -672,8 +681,12 @@ end
 ## In comparison to hclust_nn() maintains the upper-triangular matrix
 ## of cluster-cluster distances, so it requires O(N²) memory, but it's faster,
 ## because distance calculation is more efficient.
-function hclust_nn_lw(d::AbstractMatrix, metric::ReducibleMetric{T}) where {T<:Real}
-    dd = copyto!(Matrix{T}(undef, size(d)...), d)
+function hclust_nn_lw(d::AbstractMatrix, metric::ReducibleMetric{T}; use_sparse::Bool=true) where {T<:Real}
+    if use_sparse
+        dd = copy(sparse(d))
+    else
+        dd = copyto!(Matrix{T}(undef, size(d)...), d)
+    end
     htre = HclustTrees{T}(size(d, 1))
     NN = [1]      # nearest neighbors chain of tree indices, init by random tree index
     while ntrees(htre) > 1
@@ -752,7 +765,7 @@ Returns the dendrogram as a [`Hclust`](@ref) object.
      neighboring leaves from separate branches using the "fast optimal leaf ordering"
      algorithm from
      [Bar-Joseph et. al. _Bioinformatics_ (2001)](https://doi.org/10.1093/bioinformatics/17.suppl_1.S22)
-- `use_sparse::Bool` (optional): whether to store intermediate data in sparse matrix format. Currently only implemented for single linkage.
+- `use_sparse::Bool` (optional): whether to store intermediate data in sparse matrix format. Default true.
 """
 function hclust(d::AbstractMatrix; linkage::Symbol = :single,
                 uplo::Union{Symbol, Nothing} = nothing, branchorder::Symbol=:r, use_sparse::Bool=true)
@@ -765,18 +778,18 @@ function hclust(d::AbstractMatrix; linkage::Symbol = :single,
     if linkage == :single
         hmer = hclust_minimum(sd, use_sparse=use_sparse)
     elseif linkage == :complete
-        hmer = hclust_nn_lw(sd, MaximumDistance(sd))
+        hmer = hclust_nn_lw(sd, MaximumDistance(sd), use_sparse=use_sparse)
     elseif linkage == :average
-        hmer = hclust_nn_lw(sd, AverageDistance(sd))
+        hmer = hclust_nn_lw(sd, AverageDistance(sd), use_sparse=use_sparse)
     elseif linkage == :ward_presquared
-        hmer = hclust_nn_lw(sd, WardDistance(sd))
+        hmer = hclust_nn_lw(sd, WardDistance(sd), use_sparse=use_sparse)
     elseif linkage == :ward
         if sd === d
             sd = abs2.(sd)
         else
             sd .= abs2.(sd)
         end
-        hmer = hclust_nn_lw(sd, WardDistance(sd))
+        hmer = hclust_nn_lw(sd, WardDistance(sd), use_sparse=use_sparse)
         hmer.heights .= sqrt.(hmer.heights)
     else
         throw(ArgumentError("Unsupported cluster linkage $linkage"))
