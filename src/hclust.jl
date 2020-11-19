@@ -464,6 +464,134 @@ function hclust_minimum(ds::AbstractMatrix{T}; use_sparse=true) where T<:Real
     return hmer
 end
 
+
+## Efficient single link algorithm, according to Olson, O(n^2), fig 2.
+## Verified against R's implementation, correct, and about 2.5 x faster
+## For each i < j compute D(i,j) (this is already given)
+## For each 0 < i ≤ n compute Nearest Neighbor NN(i)
+## Repeat n-1 times
+##   find i,j that minimize D(i,j)
+##   merge clusters i and j
+##   update D(i,j) and NN(i) accordingly
+"""
+`hclust_minimum_threshold(ds::AbstractMatrix{T}, inv_map, overlap_threshold; use_sparse=true) where T<:Real`
+
+Clusters a matrix `ds` of pairwise distances between ROIs.
+Uses `inv_map` dictionary from indices of that matrix to frames and ROIs to ensure that no cluster has more than a fraction
+`overlap_threshold` of ROIs from the same frames.
+
+If `use_sparse` is set to true (default), the method will use sparse matrices to store intermediate data.
+"""
+function hclust_minimum_threshold(ds::AbstractMatrix{T}, inv_map, overlap_threshold; use_sparse=true) where T<:Real
+    if use_sparse
+        d = copy(sparse(ds))      # active trees distances, only upper (i < j) is used
+    else
+        d = Matrix(ds)
+    end
+    mindist = MinimalDistance(d)
+    hmer = HclustMerges{T}(size(d, 1))
+    n = nnodes(hmer)
+    ## For each 0 < i ≤ n compute Nearest Neighbor NN[i]
+    NN = [nearest_neighbor(d, i, n)[1] for i in 1:n]
+    ## the main loop
+    trees = collect(-(1:n))  # indices of active trees, initialized to all leaves
+    max_frame = maximum([maximum([y for y in keys(x)]) for x in values(inv_map)])
+    tree_frames = [[(i in keys(inv_map[j])) ? 1 : 0 for i=1:max_frame] for j=1:n]
+    blocked_merges = Dict()
+    while length(trees) > 1  # O(n)
+        # find a pair of nearest trees, i and j
+        i = nothing
+        NNmindist = Inf
+        for k in 1:length(trees) # O(n)
+            @inbounds dist = k < NN[k] ? d[k,NN[k]] : d[NN[k],k]
+            @inbounds pair = k < NN[k] ? (k, NN[k]) : (NN[k], k)
+            if dist < NNmindist && !(pair in keys(blocked_merges))
+                NNmindist = dist
+                i = k
+            end
+        end
+        # We've finished all valid merges - only remaining merges would merge same-frame neurons
+        if i == nothing
+            break
+        end
+        j = NN[i]
+        if i > j
+            i, j = j, i     # make sure i < j
+        end
+        
+        # Check if merge is valid - if invalid, retry
+        new_tree_frame = tree_frames[i] .+ tree_frames[j]
+        overlaps = sum(new_tree_frame .> 1)
+        ratio = overlaps / sum(new_tree_frame .> 0)
+        if ratio > overlap_threshold
+            blocked_merges[(i,j)] = true
+            continue
+        end
+        
+        last_tree = length(trees)
+        update_distances_upon_merge!(d, mindist, i -> 0, i, j, last_tree)
+        trees[i] = push_merge!(hmer, trees[i], trees[j], NNmindist)
+        # reassign the last tree to position j
+        trees[j] = trees[last_tree]
+        NN[j] = NN[last_tree]
+        pop!(NN)
+        pop!(trees)
+        ## update blocked merges
+        # delete any blocks on clusters merged to either of our clusters
+        # they will be rediscovered if necessary
+        i_to_j_size = sum(tree_frames[i]) / (sum(tree_frames[j]) + sum(tree_frames[i]))
+        j_to_i_size = 1 - i_to_j_size
+        for (x, y) in keys(blocked_merges)
+            # this merge wasn't edited
+            if !(x in [i, j, last_tree]) && !(y in [i, j, last_tree])
+                continue
+            end
+            if x == last_tree
+                error("Unreachable code state.")
+            end
+            if y == last_tree
+                if x < j
+                    blocked_merges[(x,j)] = blocked_merges[(x,y)]
+                elseif x > j
+                    blocked_merges[(j,x)] = blocked_merges[(x,y)]
+                end
+            end
+                    
+            delete!(blocked_merges, (x,y))
+        end
+        
+        
+        tree_frames[i] = new_tree_frame    
+        tree_frames[j] = tree_frames[last_tree]
+        pop!(tree_frames)
+        ## update NN[k]
+        for k in eachindex(NN)
+            if NN[k] == j        # j is merged into i (only valid for the min!)
+                NN[k] = i
+            elseif NN[k] == last_tree # last_tree is moved into j
+                NN[k] = j
+            end
+        end
+        ## finally we need to update NN[i], because it was nearest to j
+        NNmindist = typemax(T)
+        NNi = 0
+        for k in 1:(i-1)
+            @inbounds if (NNi == 0) || (d[k,i] < NNmindist)
+                NNmindist = d[k,i]
+                NNi = k
+            end
+        end
+        for k in (i+1):length(trees)
+            @inbounds if (NNi == 0) || (d[i,k] < NNmindist)
+                NNmindist = d[i,k]
+                NNi = k
+            end
+        end
+        NN[i] = NNi
+    end
+    return hmer
+end
+
 ## functions to compute maximum, minimum, mean for just a slice of an array
 ## FIXME: method(view(d, cl1, cl2)) would be much more generic, but it leads to extra allocations
 
