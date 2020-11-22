@@ -61,7 +61,7 @@ module Clustering
     mutualinfo,
 
     # hclust
-    Hclust, hclust, cutree, hclust_minimum_threshold
+    Hclust, hclust, cutree, hclust_minimum_threshold,
 
     # MCL
     mcl, MCLResult
