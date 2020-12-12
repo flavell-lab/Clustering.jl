@@ -481,8 +481,9 @@ Uses `inv_map` dictionary from indices of that matrix to frames and ROIs to ensu
 `overlap_threshold` of ROIs from the same frames.
 
 If `use_sparse` is set to true (default), the method will use sparse matrices to store intermediate data.
+If `pair_match` is set to true, the method will only make clusters of size at most 2 (turning it into a matching algorithm).
 """
-function hclust_minimum_threshold(ds::AbstractMatrix{T}, inv_map, overlap_threshold; use_sparse=true) where T<:Real
+function hclust_minimum_threshold(ds::AbstractMatrix{T}, inv_map, overlap_threshold; use_sparse=true, pair_match=false) where T<:Real
     if use_sparse
         d = copy(sparse(ds))      # active trees distances, only upper (i < j) is used
     else
@@ -505,7 +506,7 @@ function hclust_minimum_threshold(ds::AbstractMatrix{T}, inv_map, overlap_thresh
         for k in 1:length(trees) # O(n)
             @inbounds dist = k < NN[k] ? d[k,NN[k]] : d[NN[k],k]
             @inbounds pair = k < NN[k] ? (k, NN[k]) : (NN[k], k)
-            if dist < NNmindist && !(pair in keys(blocked_merges))
+            if dist < NNmindist && !(pair in keys(blocked_merges)) && (!pair_match || trees[k] < 0)
                 NNmindist = dist
                 i = k
             end
